@@ -1,0 +1,127 @@
+/*
+12/14/2022
+Author/Co-authors
+Pablo Diaz
+Febin Thomas
+Karolina Valenzuela
+Linette Polonio
+Sai Nitin Madduri
+Salil Singhal
+*/
+
+USE `invest`;
+
+/*
+Selecting the database
+*/
+
+WITH C3 AS (
+WITH C2 AS (
+WITH C1 AS (
+SELECT *,
+ROUND(((a.value-a.lagged_price)/a.lagged_price),6) as returns
+
+/*
+Calculating the percentage change between two periods
+*/
+
+FROM
+(
+SELECT *, LAG(date,21)OVER(
+							PARTITION BY ticker 
+                            ORDER BY date
+							) as lagged_date, 
+		  LAG(value,21)OVER(
+							PARTITION BY ticker 
+                            ORDER BY date
+							) as lagged_price 
+FROM invest.pricing_daily_new
+WHERE price_type IN ('Adjusted', 'Adju')
+) a
+)
+
+/*
+Creating a subquery to return values every 21th trading day
+*/
+
+SELECT *, ROUND(avg(returns) OVER(PARTITION BY ticker),6) as expected_return, 
+		  ROUND(STD(returns) OVER(PARTITION BY ticker),6) as sigma
+FROM C1 
+)
+
+/*
+Calculating the Mean and Atandard deviation of the Expected Returns for every ticker
+*/
+
+SELECT *
+FROM C2
+GROUP BY expected_return
+),
+
+/*
+Groupping the results
+*/
+
+query AS (SELECT 
+    ad.client_id,
+    ch.account_id,
+    cd.full_name,
+    CONCAT(sm.security_name, sm.ticker) AS security,
+    sm.ticker,
+    pd.date,
+    pd.value,
+    (pd.value * ch.quantity) AS total_value_today,
+    sm.sec_type,
+    (CASE
+        WHEN major_asset_class LIKE '%equity%' THEN 'EQUITY'
+        WHEN major_asset_class LIKE '%equty%' THEN 'EQUITY'
+        WHEN major_asset_class LIKE '%alternatives%' THEN 'ALTERNATIVES'
+        WHEN major_asset_class LIKE '%fixed income%' THEN 'FIXED INCOME'
+        WHEN major_asset_class LIKE '%fixed_income%' THEN 'FIXED INCOME'
+        WHEN major_asset_class LIKE '%commodities%' THEN 'COMMODITIES'
+    END) AS asset_class
+FROM
+    pricing_daily_new AS pd
+        INNER JOIN
+    security_masterlist AS sm ON sm.ticker = pd.ticker
+        INNER JOIN
+    holdings_current AS ch ON ch.ticker = pd.ticker
+        INNER JOIN
+    account_dim AS ad ON ad.account_id = ch.account_id
+        INNER JOIN
+    customer_details AS cd ON cd.customer_id = ad.client_id
+WHERE
+    pd.price_type IN ('Adjusted' , 'Adju')
+        AND (pd.value * ch.quantity) IS NOT NULL
+        AND ad.client_id IN (497, 226, 740)
+ORDER BY cd.full_name , pd.date , sm.ticker
+)
+
+/*
+Joinning all the required tables to get information from the three clients selected for portfolio analysis and 
+fix typos in the asset class and price categories
+*/
+
+SELECT 
+    query.client_id,
+    query.full_name,
+    query.account_id,
+    query.ticker,
+    ROUND((query.value), 2) AS 'unit value',
+    ROUND((query.total_value_today), 2) 'total value today',
+    C3.expected_return,
+    C3.sigma,
+    query.asset_class AS asset_class,
+    query.security
+FROM
+    query
+        LEFT JOIN
+    C3 ON query.ticker = C3.ticker
+GROUP BY client_id , account_id , ticker
+ORDER BY client_id , account_id , ticker , 'total value today'
+;
+
+/*
+Joining the previous CTEs to have clients and accounts information as well as the Average Expected Returns and Average Standard Deviation (Sigma)
+from each asset
+*/
